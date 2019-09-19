@@ -1,14 +1,14 @@
 const querystring = require("querystring")
 const handleBlogRouter = require("./src/router/blog")
 const handleUserRouter = require("./src/router/user")
+const { set, get } = require("./src/db/redis")
 
-// session 数据
-let SESSION_DATA = {}
+// // session 数据
+// let SESSION_DATA = {}
 
 const getCookieExpires = () => {
     const d = new Date()
     d.setTime(d.getTime() + (24 * 60 * 60 * 1000))
-    console.log("d.toGMTString() is  ", d.toGMTString())
     return d.toGMTString()
 }
 
@@ -33,13 +33,18 @@ const getPostData = (req) => {
                 return
             }
             resolve(JSON.parse(postData))
+            console.log("这里")
         })
     })
 }
 
 const serverHandle = (req, res) => {
     // 设置返回格式 JSON
-    res.setHeader('content-type', "application/json")
+    res.setHeader('Content-type', "application/json")
+
+    // 获取 path
+    const url = req.url
+    req.path = url.split("?")[0]
 
     // 解析 query
     req.query = querystring.parse(req.url.split("?")[1])
@@ -55,25 +60,47 @@ const serverHandle = (req, res) => {
         req.cookie[arr[0].trim()] = arr[1] // 这里之所以要 trim 是因为前端传过来的cookie有空格
     })
 
-    // 解析 session
+    // // 解析 session
+    // let needSetCookie = false
+    // let userId = req.cookie.userid
+    // if (userId) {
+    //     if (!SESSION_DATA[userId]) {
+    //         SESSION_DATA[userId] = {}
+    //     }
+    // } else {
+    //     needSetCookie = true
+    //     userId = `${Date.now()}_${Math.random()}`
+    //     SESSION_DATA[userId] = {} 
+    //     // 这里有个问题，cookie 到期后之前的那个随机的 userId 还会一直在SESSION_DATA中呀
+    // }
+    // req.session = SESSION_DATA[userId]
+
+    // 解析 session (使用 redis)
     let needSetCookie = false
-    let userId = req.cookie.userid
-    if (userId) {
-        if (!SESSION_DATA[userId]) {
-            SESSION_DATA[userId] = {}
-        }
-    } else {
+    let userId = req.cookie.userid // !!!!!!!!!!!!
+    if (!userId) {
         needSetCookie = true
         userId = `${Date.now()}_${Math.random()}`
-        SESSION_DATA[userId] = {} 
-        // 这里有个问题，cookie 到期后之前的那个随机的 userId 还会一直在SESSION_DATA中呀
+        // 初始化 redis 中的 session 值
+        set(userId, {})
+        // req.session = {}
     }
-    req.session = SESSION_DATA[userId]
-    console.log("SESSION_DATA: ", SESSION_DATA)
-
-
-    getPostData(req)
-        .then(postData => {
+    req.sessionId = userId
+    get(req.sessionId).then(sessionData => {
+        if (sessionData === null) {
+            // 初始化 redis 中的 session 值
+            set(req.sessionId, {})
+            // 设置 session
+            req.session = {}
+        } else {
+            // 设置 session,最终目的就是给 req.session 赋值
+            req.session = sessionData
+        }
+        // console.log("appjs中的req.session  ", req.session)
+        console.log(1)
+        return getPostData(req)
+    })
+    .then(postData => {
             req.body = postData
             // 处理 blog 路由
             // const blogData = handleBlogRouter(req, res)
@@ -109,6 +136,7 @@ const serverHandle = (req, res) => {
             //     )
             //     return
             // }
+            console.log(2)
             const userResult = handleUserRouter(req, res)
             if (userResult) {
                 userResult.then(userData => {
